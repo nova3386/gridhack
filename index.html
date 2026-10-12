@@ -131,6 +131,20 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
 .pull.hot{border-color:var(--signal);color:var(--signal)}
 .pull.danger{border-color:var(--alert);color:var(--alert);background:#1a1317}
 .pull[disabled]{opacity:.45;cursor:default}
+.zoomer{
+  position:absolute;right:14px;top:58px;z-index:4;display:flex;flex-direction:column;gap:6px;
+}
+.zoomer button{
+  width:38px;height:38px;font-family:var(--mono);font-size:17px;line-height:1;
+  background:var(--panel);color:var(--fg);border:1px solid var(--line-2);
+  border-radius:3px;cursor:pointer;padding:0;
+}
+.zoomer button:active{border-color:var(--signal);color:var(--signal)}
+.zoomlv{
+  position:absolute;right:14px;top:140px;z-index:4;
+  font-size:10px;letter-spacing:.1em;color:var(--signal);text-align:right;
+  pointer-events:none;opacity:0;transition:opacity .35s;font-variant-numeric:tabular-nums;
+}
 .osmstate{
   position:absolute;left:14px;bottom:12px;z-index:4;max-width:72%;text-align:left;
   font-family:var(--mono);font-size:9px;line-height:1.5;letter-spacing:.12em;text-transform:uppercase;
@@ -204,6 +218,11 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
     <div class="walkhint" id="walkhint">Húzd a térképet a sétáláshoz</div>
     <div class="toast" id="toast"></div>
     <button class="recenter" id="recenter">Középre</button>
+    <div class="zoomer">
+      <button id="zIn" aria-label="Nagyítás">+</button>
+      <button id="zOut" aria-label="Kicsinyítés">−</button>
+    </div>
+    <div class="zoomlv" id="zoomLv">×1.0</div>
     <div class="info" id="info">
       <div class="irow">
         <span class="iname" id="infoName">—</span>
@@ -387,7 +406,9 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
   }
 
   /* ---------- térkép rajz ---------- */
-  var mc=document.getElementById("map"), mx=mc.getContext("2d"), PPM=1.9, dpr=1;
+  var mc=document.getElementById("map"), mx=mc.getContext("2d"), PPM=1.9, dpr=1, ZOOM=1;
+  var ZMIN=0.35, ZMAX=3.2;
+  function ppm(){ return PPM*ZOOM; }
   function sizeMap(){
     var r=mc.getBoundingClientRect();
     dpr=Math.min(window.devicePixelRatio||1,2.5);
@@ -396,7 +417,7 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
   window.addEventListener("resize",sizeMap);
 
   function drawMap(ts){
-    var W=mc.width,H=mc.height,cx=W/2,cy=H*0.52, s=PPM*dpr;
+    var W=mc.width,H=mc.height,cx=W/2,cy=H*0.52, s=ppm()*dpr;
     mx.fillStyle="#080c10"; mx.fillRect(0,0,W,H);
     var halfW=W/2/s+60, halfH=H/2/s+60;
     /* a kamera közepe = a játékos + a pásztázási eltolás */
@@ -524,6 +545,24 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
         mx.beginPath(); mx.arc(X,Y,nr+(4+q*3.2)*dpr,0,TAU); mx.stroke();
       }
       mx.globalAlpha=1;
+      /* kijelölés */
+      if(n===infoNode){
+        var sp=0.5+0.5*Math.sin(ts/280);
+        mx.save();
+        mx.strokeStyle="#c6d3dc"; mx.lineWidth=1.6*dpr;
+        mx.globalAlpha=0.55+0.4*sp;
+        mx.setLineDash([3*dpr,3*dpr]);
+        mx.beginPath(); mx.arc(X,Y,nr+(9+2*sp)*dpr,0,TAU); mx.stroke();
+        mx.setLineDash([]);
+        /* sarokjelek, hogy koppintás nélkül is kiugorjon */
+        var cr=nr+(14+2*sp)*dpr;
+        mx.globalAlpha=0.8; mx.lineWidth=2*dpr;
+        for(var m=0;m<4;m++){
+          var a0=m*TAU/4+Math.PI/4-0.22, a1=a0+0.44;
+          mx.beginPath(); mx.arc(X,Y,cr,a0,a1); mx.stroke();
+        }
+        mx.restore();
+      }
       /* folyamatban lévő ostrom */
       if(n.siege){
         var sg=n.siege, prog=sg.t/sg.len;
@@ -540,11 +579,12 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
       }
       mx.restore();
 
-      if(dist<95){
-        mx.fillStyle = n.owner===1 ? "rgba(143,211,106,.75)" : (n.owner===2 ? "rgba(226,87,76,.8)" : (inR?"#f0a338":"rgba(96,115,127,.85)"));
-        mx.font=(9.5*dpr)+"px IBM Plex Mono, ui-monospace, monospace";
+      if(dist<95/ZOOM||n===infoNode){
+        mx.fillStyle = n===infoNode ? "#c6d3dc"
+          : (n.owner===1 ? "rgba(143,211,106,.75)" : (n.owner===2 ? "rgba(226,87,76,.8)" : (inR?"#f0a338":"rgba(96,115,127,.85)")));
+        mx.font=(n===infoNode?"600 ":"")+(9.5*dpr)+"px IBM Plex Mono, ui-monospace, monospace";
         mx.textAlign="center";
-        mx.fillText(n.kind.toUpperCase(), X, Y-11*dpr);
+        mx.fillText((n===infoNode?n.label:n.kind).toUpperCase(), X, Y-(n===infoNode?19:11)*dpr);
       }
     });
 
@@ -583,8 +623,22 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
     return {x:e.clientX-r.left, y:e.clientY-r.top};
   }
 
+  /* két ujjal nagyítás */
+  var ptrs={}, pinch=null;
+  function ptrCount(){ var n=0; for(var k in ptrs) n++; return n; }
+  function ptrPair(){ var a=[]; for(var k in ptrs) a.push(ptrs[k]); return a; }
+
   wrap.addEventListener("pointerdown",function(e){
     var p=localXY(e);
+    ptrs[e.pointerId]=p;
+    if(ptrCount()===2){
+      var q=ptrPair();
+      var dx=q[0].x-q[1].x, dy=q[0].y-q[1].y;
+      pinch={d0:Math.max(1,Math.sqrt(dx*dx+dy*dy)), z0:ZOOM};
+      stick.on=false; drag.on=false; vel.x=0; vel.y=0;
+      e.preventDefault();
+      return;
+    }
     if(GPS.on){
       /* GPS-módban a húzás a térképet pásztázza, nem a játékost mozgatja */
       drag.on=true; drag.id=e.pointerId; drag.sx=p.x; drag.sy=p.y;
@@ -602,8 +656,17 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
   });
   wrap.addEventListener("pointermove",function(e){
     var p=localXY(e);
+    if(ptrs[e.pointerId]) ptrs[e.pointerId]=p;
+    if(pinch&&ptrCount()===2){
+      var q=ptrPair();
+      var dx2=q[0].x-q[1].x, dy2=q[0].y-q[1].y;
+      var d=Math.max(1,Math.sqrt(dx2*dx2+dy2*dy2));
+      ZOOM=Math.max(ZMIN,Math.min(ZMAX, pinch.z0*(d/pinch.d0)));
+      showZoom();
+      return;
+    }
     if(drag.on&&e.pointerId===drag.id){
-      var s=PPM;
+      var s=ppm();
       pan.x=drag.px-(p.x-drag.sx)/s;
       pan.y=drag.py-(p.y-drag.sy)/s;
       drag.moved=Math.max(drag.moved, Math.abs(p.x-drag.sx)+Math.abs(p.y-drag.sy));
@@ -614,6 +677,12 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
     stick.cx=p.x; stick.cy=p.y;
   });
   function endPointer(e){
+    delete ptrs[e.pointerId];
+    if(pinch){
+      if(ptrCount()<2){ pinch=null; drag.on=false; stick.on=false; vel.x=0; vel.y=0; }
+      try{ wrap.releasePointerCapture(e.pointerId); }catch(x){}
+      return;
+    }
     if(drag.on&&e.pointerId===drag.id){
       drag.on=false;
       try{ wrap.releasePointerCapture(e.pointerId); }catch(x){}
@@ -632,10 +701,9 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
   /* koppintás egy csomópontra → adatlap */
   function tapAt(p){
     var best=null, bd=1e9;
-    var d2=Math.min(window.devicePixelRatio||1,2.5);
     nodes.forEach(function(n){
       if(n._sx===undefined) return;
-      var dx=n._sx/d2-p.x, dy=n._sy/d2-p.y;
+      var dx=n._sx/dpr-p.x, dy=n._sy/dpr-p.y;
       var d=Math.sqrt(dx*dx+dy*dy);
       if(d<26&&d<bd){ bd=d; best=n; }
     });
@@ -661,6 +729,23 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
   document.getElementById("recenter").addEventListener("click",function(){
     pan.x=0; pan.y=0; this.classList.remove("on");
   });
+
+  /* nagyítás gombbal is, nem csak csipkedéssel */
+  var zoomT=0;
+  function showZoom(){
+    var el=document.getElementById("zoomLv");
+    el.textContent=(ZOOM<1?"×"+ZOOM.toFixed(2):"×"+ZOOM.toFixed(1));
+    el.style.opacity="1"; zoomT=1.4;
+  }
+  function stepZoom(f){
+    ZOOM=Math.max(ZMIN,Math.min(ZMAX,ZOOM*f));
+    showZoom();
+  }
+  document.getElementById("zIn").addEventListener("click",function(){ stepZoom(1.35); });
+  document.getElementById("zOut").addEventListener("click",function(){ stepZoom(1/1.35); });
+  wrap.addEventListener("wheel",function(e){
+    e.preventDefault(); stepZoom(e.deltaY<0?1.12:1/1.12);
+  },{passive:false});
 
   document.getElementById("speed").addEventListener("click",function(){
     fast=!fast; this.dataset.fast=fast?"1":"0";
@@ -706,6 +791,10 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
     if(toastT>0){
       toastT-=dt;
       if(toastT<=0) document.getElementById("toast").style.opacity="0";
+    }
+    if(zoomT>0){
+      zoomT-=dt;
+      if(zoomT<=0) document.getElementById("zoomLv").style.opacity="0";
     }
 
     saveT+=dt; if(saveT>3){ saveT=0; save(); }
