@@ -205,8 +205,8 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
     <span class="brand">GRIDHACK</span>
     <button class="speed" id="speed" data-fast="0">Séta</button>
     <div class="stats">
-      <span>Csomópont <b id="stCap">0</b></span>
-      <span>Körzet <b id="stDist">0/0</b></span>
+      <span>Te/Vektor <b id="stCap">0/0</b></span>
+      <span>Hálózat <b id="stDist">0</b></span>
       <span>Kredit <b id="stCr">0</b></span>
     </div>
   </div>
@@ -407,7 +407,10 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
 
   /* ---------- térkép rajz ---------- */
   var mc=document.getElementById("map"), mx=mc.getContext("2d"), PPM=1.9, dpr=1, ZOOM=1;
-  var ZMIN=0.35, ZMAX=3.2;
+  var ZMIN=0.07, ZMAX=3.2;
+  var INFLU=95;      /* egy csomópont befolyási sugara méterben */
+  var LINK=130;      /* ennyin belül számít két csomópont összekötöttnek */
+  var terr=document.createElement("canvas"), tx=terr.getContext("2d");
   function ppm(){ return PPM*ZOOM; }
   function sizeMap(){
     var r=mc.getBoundingClientRect();
@@ -424,25 +427,36 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
     var cxm=me.x+pan.x, cym=me.y+pan.y;
     var pxP=cx+(me.x-cxm)*s, pyP=cy+(me.y-cym)*s;
 
-    /* körzetszínezés */
-    var d0x=Math.floor((cxm-halfW)/DIST), d1x=Math.floor((cxm+halfW)/DIST);
-    var d0y=Math.floor((cym-halfH)/DIST), d1y=Math.floor((cym+halfH)/DIST);
-    for(var gx=d0x;gx<=d1x;gx++) for(var gy=d0y;gy<=d1y;gy++){
-      var k=gx+"_"+gy, d=districts[k];
-      if(!d||!d.total) continue;
-      var mine=d.mine/d.total, theirs=d.theirs/d.total;
-      if(mine<=0&&theirs<=0) continue;
-      var X=cx+(gx*DIST-cxm)*s, Y=cy+(gy*DIST-cym)*s, SZ=DIST*s;
-      if(theirs>mine){
-        mx.fillStyle = theirs>=0.5 ? "rgba(226,87,76,.08)" : "rgba(226,87,76,.035)";
-        mx.fillRect(X,Y,SZ,SZ);
-        if(theirs>=0.5){ mx.strokeStyle="rgba(226,87,76,.25)"; mx.lineWidth=1*dpr; mx.strokeRect(X,Y,SZ,SZ); }
-      } else {
-        mx.fillStyle = mine>=0.5 ? "rgba(143,211,106,.07)" : "rgba(63,201,189,.035)";
-        mx.fillRect(X,Y,SZ,SZ);
-        if(mine>=0.5){ mx.strokeStyle="rgba(143,211,106,.22)"; mx.lineWidth=1*dpr; mx.strokeRect(X,Y,SZ,SZ); }
+    /* befolyási mezők: minden elfoglalt csomópont maga köré vetít egy területet */
+    (function(){
+      var q=4;
+      if(terr.width!==Math.ceil(W/q)||terr.height!==Math.ceil(H/q)){
+        terr.width=Math.ceil(W/q); terr.height=Math.ceil(H/q);
       }
-    }
+      tx.clearRect(0,0,terr.width,terr.height);
+      tx.globalCompositeOperation="lighter";
+      var r=INFLU*s/q;
+      if(r<0.7) return;
+      nodes.forEach(function(n){
+        if(!n.owner) return;
+        if(Math.abs(n.x-cxm)>halfW+INFLU||Math.abs(n.y-cym)>halfH+INFLU) return;
+        var X=(cx+(n.x-cxm)*s)/q, Y=(cy+(n.y-cym)*s)/q;
+        var rr=r*(1+(SIZES[n.size].maxIce>2?0.25:0))*(1+n.ice*0.12);
+        var g=tx.createRadialGradient(X,Y,0,X,Y,rr);
+        var col=n.owner===1?"143,211,106":"226,87,76";
+        g.addColorStop(0,"rgba("+col+",0.55)");
+        g.addColorStop(0.62,"rgba("+col+",0.30)");
+        g.addColorStop(1,"rgba("+col+",0)");
+        tx.fillStyle=g;
+        tx.beginPath(); tx.arc(X,Y,rr,0,TAU); tx.fill();
+      });
+      tx.globalCompositeOperation="source-over";
+      mx.save();
+      mx.globalAlpha=0.5;
+      mx.imageSmoothingEnabled=true;
+      mx.drawImage(terr,0,0,W,H);
+      mx.restore();
+    })();
 
     /* GPS-módban távolsággyűrűk, amíg nincs utcaadat */
     if(GPS.on&&!streets.length){
@@ -476,15 +490,19 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
           mx.stroke();
         });
       });
-      /* utcanevek */
+      /* utcanevek — csak közeli nézetben, és nevenként egyszer */
+      if(ZOOM>=0.85){
+      var seen={};
       mx.font=(9.5*dpr)+"px IBM Plex Mono, ui-monospace, monospace";
       mx.textAlign="center";
       streets.forEach(function(st){
         if(!st.name||!st.pts||st.pts.length<2) return;
+        if(seen[st.name]) return;
         var i=Math.floor(st.pts.length/2);
         var p1=st.pts[i-1], p2=st.pts[i];
         var mxp=(p1.x+p2.x)/2, myp=(p1.y+p2.y)/2;
         if(Math.abs(mxp-cxm)>halfW||Math.abs(myp-cym)>halfH) return;
+        seen[st.name]=1;
         var ang=Math.atan2(p2.y-p1.y,p2.x-p1.x);
         if(ang>Math.PI/2) ang-=Math.PI; if(ang<-Math.PI/2) ang+=Math.PI;
         mx.save();
@@ -494,6 +512,7 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
         mx.fillText(st.name, 0, -7*dpr);
         mx.restore();
       });
+      }
     }
 
     /* hatótáv-kör */
@@ -504,6 +523,9 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
 
     /* csomópontok */
     var best=null, bestD=1e9;
+    /* kicsinyítve a közeli csomópontokat egy jelzéssé vonjuk össze */
+    var clusterMode = ZOOM<0.55;
+    var cellPx = 46*dpr, buckets={};
     nodes.forEach(function(n){
       var dx=n.x-me.x, dy=n.y-me.y;
       var dist=Math.sqrt(dx*dx+dy*dy);
@@ -512,6 +534,16 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
       if(Math.abs(n.x-cxm)>halfW||Math.abs(n.y-cym)>halfH) return;
       var X=cx+(n.x-cxm)*s, Y=cy+(n.y-cym)*s;
       n._sx=X; n._sy=Y;
+      if(clusterMode&&n!==infoNode){
+        var bk=Math.round(X/cellPx)+"_"+Math.round(Y/cellPx);
+        var b=buckets[bk];
+        if(!b){ b=buckets[bk]={n:0,mine:0,theirs:0,sx:0,sy:0,siege:false,big:1}; }
+        b.n++; b.sx+=X; b.sy+=Y;
+        if(n.owner===1) b.mine++; else if(n.owner===2) b.theirs++;
+        if(n.siege) b.siege=true;
+        if(n.size>b.big) b.big=n.size;
+        return;
+      }
       var inR=dist<=RANGE;
       var col = n.owner===1 ? "#8fd36a" : (n.owner===2 ? "#e2574c" : (inR ? "#f0a338" : "#3fc9bd"));
       mx.save();
@@ -587,6 +619,48 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
         mx.fillText((n===infoNode?n.label:n.kind).toUpperCase(), X, Y-(n===infoNode?19:11)*dpr);
       }
     });
+
+    /* összevont csomópont-jelzések */
+    if(clusterMode){
+      for(var bk2 in buckets){
+        var b=buckets[bk2];
+        var X=b.sx/b.n, Y=b.sy/b.n;
+        var neutral=b.n-b.mine-b.theirs;
+        if(b.n===1){
+          var c1 = b.mine ? "#8fd36a" : (b.theirs ? "#e2574c" : "#3fc9bd");
+          mx.fillStyle=c1; mx.globalAlpha=0.85;
+          mx.beginPath(); mx.arc(X,Y,3.2*dpr,0,TAU); mx.fill();
+          mx.globalAlpha=1;
+          continue;
+        }
+        var rad=(7.5+Math.min(9,b.n*1.1))*dpr;
+        mx.save();
+        mx.fillStyle="#0d151b";
+        mx.beginPath(); mx.arc(X,Y,rad,0,TAU); mx.fill();
+        /* a gyűrű arányosan mutatja, kié a csoport — itt látszik a frontvonal */
+        var start=-Math.PI/2;
+        [[b.mine,"#8fd36a"],[b.theirs,"#e2574c"],[neutral,"#3fc9bd"]].forEach(function(seg){
+          if(!seg[0]) return;
+          var a=TAU*seg[0]/b.n;
+          mx.strokeStyle=seg[1]; mx.lineWidth=2.4*dpr;
+          mx.beginPath(); mx.arc(X,Y,rad,start,start+a); mx.stroke();
+          start+=a;
+        });
+        if(b.siege){
+          var pb=0.5+0.5*Math.sin(ts/150);
+          mx.globalAlpha=0.4+0.5*pb;
+          mx.strokeStyle="#e2574c"; mx.lineWidth=1.4*dpr;
+          mx.beginPath(); mx.arc(X,Y,rad+4*dpr,0,TAU); mx.stroke();
+          mx.globalAlpha=1;
+        }
+        mx.fillStyle="#c6d3dc";
+        mx.font="600 "+(10*dpr)+"px IBM Plex Mono, ui-monospace, monospace";
+        mx.textAlign="center"; mx.textBaseline="middle";
+        mx.fillText(String(b.n), X, Y+0.5*dpr);
+        mx.textBaseline="alphabetic";
+        mx.restore();
+      }
+    }
 
     /* játékos */
     mx.save();
@@ -700,6 +774,17 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
 
   /* koppintás egy csomópontra → adatlap */
   function tapAt(p){
+    /* kicsinyített nézetben a koppintás belenagyít, nem kijelöl */
+    if(ZOOM<0.55){
+      var r=wrap.getBoundingClientRect();
+      var wx=(p.x-r.width/2)/ppm()+me.x+pan.x;
+      var wy=(p.y-r.height*0.52)/ppm()+me.y+pan.y;
+      ZOOM=Math.min(ZMAX,ZOOM*2.4);
+      pan.x=wx-me.x; pan.y=wy-me.y;
+      document.getElementById("recenter").classList.add("on");
+      showZoom();
+      return;
+    }
     var best=null, bd=1e9;
     nodes.forEach(function(n){
       if(n._sx===undefined) return;
@@ -840,15 +925,32 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
     }
   }
 
+  /* összefüggő hálózat: a LINK távolságon belüli saját csomópontok egy csoport */
+  function biggestCluster(){
+    var own=nodes.filter(function(n){ return n.owner===1; });
+    if(!own.length) return 0;
+    var seen={}, best=0;
+    own.forEach(function(st){
+      if(seen[st.id]) return;
+      var stack=[st], size=0; seen[st.id]=1;
+      while(stack.length){
+        var c=stack.pop(); size++;
+        own.forEach(function(o){
+          if(seen[o.id]) return;
+          var dx=o.x-c.x, dy=o.y-c.y;
+          if(dx*dx+dy*dy<=LINK*LINK){ seen[o.id]=1; stack.push(o); }
+        });
+      }
+      if(size>best) best=size;
+    });
+    return best;
+  }
+
   function refreshStats(){
-    document.getElementById("stCap").textContent=nodes.filter(function(n){return n.owner===1;}).length;
-    var mineD=0, theirD=0;
-    for(var k in districts){
-      var d=districts[k]; if(!d.total) continue;
-      if(d.mine/d.total>=0.5) mineD++;
-      else if(d.theirs/d.total>=0.5) theirD++;
-    }
-    document.getElementById("stDist").textContent=mineD+"/"+theirD;
+    var mine=nodes.filter(function(n){return n.owner===1;}).length;
+    var theirs=nodes.filter(function(n){return n.owner===2;}).length;
+    document.getElementById("stCap").textContent=mine+"/"+theirs;
+    document.getElementById("stDist").textContent=biggestCluster();
     document.getElementById("stCr").textContent=credits;
   }
 
@@ -1446,8 +1548,8 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
     n.owner=1; n.ice=0; n.siege=null;
     credits+=gain;
     recountDistricts(); refreshStats(); save();
-    var d=districts[n.d], share=d.mine/d.total;
-    var extra = share>=0.5 ? " A körzet többsége a tiéd — monopólium-bónusz aktív." : "";
+    var cl=biggestCluster();
+    var extra = cl>=3 ? " Összefüggő hálózat: "+cl+" csomópont — monopólium-bónusz aktív." : "";
     var head = was===2 ? "Visszafoglalva a Vektortól." : (SIZES[n.size].name+" elfoglalva.");
     var st=document.getElementById("ovStatus");
     st.className="ovstatus win";
