@@ -131,6 +131,15 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
 .pull.hot{border-color:var(--signal);color:var(--signal)}
 .pull.danger{border-color:var(--alert);color:var(--alert);background:#1a1317}
 .pull[disabled]{opacity:.45;cursor:default}
+.osmstate{
+  position:absolute;left:14px;bottom:12px;z-index:4;max-width:72%;text-align:left;
+  font-family:var(--mono);font-size:9px;line-height:1.5;letter-spacing:.12em;text-transform:uppercase;
+  background:var(--panel);color:var(--dim);border:1px solid var(--line);
+  padding:6px 9px;border-radius:2px;cursor:pointer;
+}
+.osmstate.wait{color:var(--carrier);border-color:var(--line-2)}
+.osmstate.ok{color:var(--ok);border-color:rgba(143,211,106,.35)}
+.osmstate.err{color:var(--alert);border-color:rgba(226,87,76,.45)}
 .recenter{
   position:absolute;top:10px;right:14px;z-index:4;
   font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase;
@@ -139,7 +148,7 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
 }
 .recenter.on{opacity:1;pointer-events:auto}
 .info{
-  position:absolute;left:14px;right:14px;bottom:12px;z-index:5;
+  position:absolute;left:14px;right:14px;bottom:46px;z-index:5;
   background:var(--panel);border:1px solid var(--line-2);border-left:2px solid var(--carrier);
   border-radius:3px;padding:10px 12px;display:none;flex-direction:column;gap:4px;
 }
@@ -191,6 +200,7 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
   <div class="mapwrap" id="mapwrap">
     <canvas id="map"></canvas>
     <div class="hud" id="hud">Megtett út <b id="hudWalk">0 m</b><br>Hatótáv <b>25 m</b><br><b id="hudAcc">—</b></div>
+    <button class="osmstate" id="osmState">Szimulált utcaháló</button>
     <div class="walkhint" id="walkhint">Húzd a térképet a sétáláshoz</div>
     <div class="toast" id="toast"></div>
     <button class="recenter" id="recenter">Középre</button>
@@ -413,8 +423,8 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
       }
     }
 
-    /* utcák — valódi GPS-nél nincs utcaadatunk, ezért távolsággyűrűk */
-    if(GPS.on){
+    /* GPS-módban távolsággyűrűk, amíg nincs utcaadat */
+    if(GPS.on&&!streets.length){
       mx.strokeStyle="#15202a"; mx.lineWidth=1*dpr;
       [25,50,100,200,400].forEach(function(m){
         mx.beginPath(); mx.arc(pxP,pyP,m*s,0,TAU); mx.stroke();
@@ -640,7 +650,7 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
     var own = n.owner===1 ? "a tiéd" : (n.owner===2 ? "Vektor Szindikátus" : "semleges");
     document.getElementById("infoName").textContent=n.label;
     document.getElementById("infoMeta").textContent=
-      (n.addr? n.addr+" · " : "")+SZ.name+" · ICE Tier "+(n.tier===3?"III":"II");
+      n.kind+" · "+(n.addr? n.addr+" · " : "")+SZ.name+" · ICE Tier "+(n.tier===3?"III":"II");
     document.getElementById("infoState").textContent=
       Math.round(dist)+" m · "+own+(n.ice?" · ICE "+n.ice+"/"+SZ.maxIce:"")+(n.siege?" · OSTROM ALATT":"");
     document.getElementById("info").classList.add("on");
@@ -1456,7 +1466,9 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
 
   /* ---------- valódi OpenStreetMap-adat ---------- */
   var OSM_HOSTS=["https://overpass-api.de/api/interpreter",
-                 "https://overpass.kumi.systems/api/interpreter"];
+                 "https://overpass.kumi.systems/api/interpreter",
+                 "https://overpass.private.coffee/api/interpreter",
+                 "https://maps.mail.ru/osm/tools/overpass/api/interpreter"];
   var HW="primary|secondary|tertiary|residential|unclassified|living_street|pedestrian|footway|path|service";
   var AM="cafe|restaurant|fast_food|bar|pub|pharmacy|bank|post_office|library|cinema|theatre|doctors|dentist|fuel|ice_cream|bakery";
 
@@ -1469,22 +1481,42 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
       ");out geom;";
   }
 
+  function osmStatus(txt,cls){
+    var el=document.getElementById("osmState");
+    el.textContent=txt;
+    el.className="osmstate "+(cls||"");
+  }
+
   function fetchOSM(lat,lon){
     var rad=700, q=osmQuery(lat,lon,rad);
-    var i=0;
+    var i=0, errs=[];
+    osmStatus("Térképadat letöltése…","wait");
     function attempt(){
-      if(i>=OSM_HOSTS.length){ osmFailed(); return; }
+      if(i>=OSM_HOSTS.length){ osmFailed(errs.join(" / ")); return; }
       var url=OSM_HOSTS[i++];
-      fetch(url,{method:"POST",body:"data="+encodeURIComponent(q),
-                 headers:{"Content-Type":"application/x-www-form-urlencoded"}})
-        .then(function(r){ if(!r.ok) throw new Error(r.status); return r.json(); })
+      var ctl=new AbortController();
+      var to=setTimeout(function(){ ctl.abort(); },30000);
+      osmStatus("Térképadat letöltése… ("+i+"/"+OSM_HOSTS.length+")","wait");
+      /* az utolsó próbálkozás GET-tel megy, mert azt egyes hálózatok jobban engedik */
+      var opt = (i===OSM_HOSTS.length)
+        ? {signal:ctl.signal}
+        : {method:"POST",body:"data="+encodeURIComponent(q),
+           headers:{"Content-Type":"application/x-www-form-urlencoded"},
+           signal:ctl.signal};
+      var target = (i===OSM_HOSTS.length) ? url+"?data="+encodeURIComponent(q) : url;
+      fetch(target,opt)
+        .then(function(r){ clearTimeout(to); if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
         .then(function(j){ buildFromOSM(j); })
-        .catch(function(){ attempt(); });
+        .catch(function(e){ clearTimeout(to); errs.push(String(e.message||e)); attempt(); });
     }
     attempt();
   }
-  function osmFailed(){
-    toast("Nem jött OSM-adat — generált utcahálóval megy tovább.");
+  function osmFailed(why){
+    osmStatus("Térképadat nem jött meg ("+(why||"ismeretlen hiba")+") — koppints az újrapróbáláshoz","err");
+  }
+  function retryOSM(){
+    if(GPS.lat0===null) return;
+    fetchOSM(GPS.lat0,GPS.lon0);
   }
 
   function hash32(str){
@@ -1543,7 +1575,7 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
         d:distKey(p.x,p.y) });
     });
 
-    if(ns.length<6){ osmFailed(); return; }
+    if(ns.length<6){ osmFailed("csak "+ns.length+" hely van a környéken"); return; }
 
     nodes=ns; streets=sts;
     districts={};
@@ -1558,8 +1590,8 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
     var take=Math.max(2,Math.round(nodes.length*0.22));
     far.slice(0,take).forEach(function(n){ n.owner=2; n.ice=Math.random()<0.5?1:0; });
     recountDistricts();
-    load(); refreshStats();
-    toast(nodes.length+" valódi csomópont betöltve a környékedről.");
+    load(); refreshStats(); hideInfo();
+    osmStatus(nodes.length+" valódi hely · "+streets.length+" utca","ok");
   }
 
   function startGPS(){
@@ -1599,6 +1631,7 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
     document.getElementById("gate").classList.remove("on");
   }
 
+  document.getElementById("osmState").addEventListener("click",retryOSM);
   document.getElementById("gpsBtn").addEventListener("click",startGPS);
   document.getElementById("simBtn").addEventListener("click",startSim);
 
