@@ -131,6 +131,24 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
 .pull.hot{border-color:var(--signal);color:var(--signal)}
 .pull.danger{border-color:var(--alert);color:var(--alert);background:#1a1317}
 .pull[disabled]{opacity:.45;cursor:default}
+.recenter{
+  position:absolute;top:10px;right:14px;z-index:4;
+  font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase;
+  background:var(--panel);color:var(--signal);border:1px solid var(--signal);
+  padding:7px 10px;border-radius:2px;cursor:pointer;opacity:0;pointer-events:none;transition:opacity .2s;
+}
+.recenter.on{opacity:1;pointer-events:auto}
+.info{
+  position:absolute;left:14px;right:14px;bottom:12px;z-index:5;
+  background:var(--panel);border:1px solid var(--line-2);border-left:2px solid var(--carrier);
+  border-radius:3px;padding:10px 12px;display:none;flex-direction:column;gap:4px;
+}
+.info.on{display:flex}
+.irow{display:flex;align-items:flex-start;gap:10px}
+.iname{font-family:var(--sans);font-weight:600;font-size:15px;line-height:1.2;flex:1;min-width:0}
+.iclose{background:transparent;border:0;color:var(--dim);font-size:15px;line-height:1;padding:0 2px;cursor:pointer}
+.imeta{font-size:10.5px;color:var(--dim);line-height:1.5}
+.istate{font-size:11px;color:var(--fg);font-variant-numeric:tabular-nums}
 .gate{z-index:30}
 .gatein{justify-content:center;gap:14px}
 .gatehead{display:flex;flex-direction:column;gap:7px;margin-bottom:6px}
@@ -175,6 +193,15 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
     <div class="hud" id="hud">Megtett út <b id="hudWalk">0 m</b><br>Hatótáv <b>25 m</b><br><b id="hudAcc">—</b></div>
     <div class="walkhint" id="walkhint">Húzd a térképet a sétáláshoz</div>
     <div class="toast" id="toast"></div>
+    <button class="recenter" id="recenter">Középre</button>
+    <div class="info" id="info">
+      <div class="irow">
+        <span class="iname" id="infoName">—</span>
+        <button class="iclose" id="infoClose">✕</button>
+      </div>
+      <div class="imeta" id="infoMeta"></div>
+      <div class="istate" id="infoState"></div>
+    </div>
   </div>
 
   <div class="bottom">
@@ -263,8 +290,8 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
     var xx=-EXT;
     while(xx<=EXT){ vs.push(xx); xx+= 92+Math.round(r()*66); }
 
-    hs.forEach(function(y,i){ streets.push({a:{x:-EXT,y:y},b:{x:EXT,y:y},name:STREETS[i%STREETS.length]+" utca",horiz:true}); });
-    vs.forEach(function(x,i){ streets.push({a:{x:x,y:-EXT},b:{x:x,y:EXT},name:STREETS[(i+5)%STREETS.length]+" út",horiz:false}); });
+    hs.forEach(function(y,i){ streets.push({pts:[{x:-EXT,y:y},{x:EXT,y:y}],name:STREETS[i%STREETS.length]+" utca",horiz:true,a:{x:-EXT,y:y},b:{x:EXT,y:y},major:true}); });
+    vs.forEach(function(x,i){ streets.push({pts:[{x:x,y:-EXT},{x:x,y:EXT}],name:STREETS[(i+5)%STREETS.length]+" út",horiz:false,a:{x:x,y:-EXT},b:{x:x,y:EXT},major:true}); });
 
     /* csomópontok az utcák mentén */
     var id=0;
@@ -319,15 +346,20 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
   var RANGE=25;
   var target=null;
 
+  /* a mentés helyszínhez kötött: más környéken más pálya, más állás */
+  function storeKey(){
+    return "gridhack_v3_"+(GPS.lat0===null ? "sim"
+      : (Math.round(GPS.lat0*500)+"_"+Math.round(GPS.lon0*500)));
+  }
   function save(){
     try{
       var st=nodes.filter(function(n){return n.owner||n.ice;}).map(function(n){return [n.id,n.owner,n.ice];});
-      localStorage.setItem("gridhack_city2", JSON.stringify({st:st,cr:credits,w:Math.round(walked),x:me.x,y:me.y}));
+      localStorage.setItem(storeKey(), JSON.stringify({st:st,cr:credits,w:Math.round(walked),x:me.x,y:me.y}));
     }catch(e){}
   }
   function load(){
     try{
-      var s=JSON.parse(localStorage.getItem("gridhack_city2")||"null");
+      var s=JSON.parse(localStorage.getItem(storeKey())||"null");
       if(!s) return;
       var map={}; (s.st||[]).forEach(function(a){ map[a[0]]=a; });
       nodes.forEach(function(n){ var a=map[n.id]; if(a){ n.owner=a[1]; n.ice=a[2]; } else { n.owner=0; n.ice=0; } });
@@ -357,16 +389,19 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
     var W=mc.width,H=mc.height,cx=W/2,cy=H*0.52, s=PPM*dpr;
     mx.fillStyle="#080c10"; mx.fillRect(0,0,W,H);
     var halfW=W/2/s+60, halfH=H/2/s+60;
+    /* a kamera közepe = a játékos + a pásztázási eltolás */
+    var cxm=me.x+pan.x, cym=me.y+pan.y;
+    var pxP=cx+(me.x-cxm)*s, pyP=cy+(me.y-cym)*s;
 
     /* körzetszínezés */
-    var d0x=Math.floor((me.x-halfW)/DIST), d1x=Math.floor((me.x+halfW)/DIST);
-    var d0y=Math.floor((me.y-halfH)/DIST), d1y=Math.floor((me.y+halfH)/DIST);
+    var d0x=Math.floor((cxm-halfW)/DIST), d1x=Math.floor((cxm+halfW)/DIST);
+    var d0y=Math.floor((cym-halfH)/DIST), d1y=Math.floor((cym+halfH)/DIST);
     for(var gx=d0x;gx<=d1x;gx++) for(var gy=d0y;gy<=d1y;gy++){
       var k=gx+"_"+gy, d=districts[k];
       if(!d||!d.total) continue;
       var mine=d.mine/d.total, theirs=d.theirs/d.total;
       if(mine<=0&&theirs<=0) continue;
-      var X=cx+(gx*DIST-me.x)*s, Y=cy+(gy*DIST-me.y)*s, SZ=DIST*s;
+      var X=cx+(gx*DIST-cxm)*s, Y=cy+(gy*DIST-cym)*s, SZ=DIST*s;
       if(theirs>mine){
         mx.fillStyle = theirs>=0.5 ? "rgba(226,87,76,.08)" : "rgba(226,87,76,.035)";
         mx.fillRect(X,Y,SZ,SZ);
@@ -382,28 +417,58 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
     if(GPS.on){
       mx.strokeStyle="#15202a"; mx.lineWidth=1*dpr;
       [25,50,100,200,400].forEach(function(m){
-        mx.beginPath(); mx.arc(cx,cy,m*s,0,TAU); mx.stroke();
+        mx.beginPath(); mx.arc(pxP,pyP,m*s,0,TAU); mx.stroke();
       });
       mx.fillStyle="rgba(96,115,127,.45)";
       mx.font=(9*dpr)+"px IBM Plex Mono, ui-monospace, monospace";
       mx.textAlign="left";
-      [50,100,200].forEach(function(m){ mx.fillText(m+" m", cx+4*dpr, cy-m*s-4*dpr); });
-    } else
-    streets.forEach(function(st){
-      var ax=cx+(st.a.x-me.x)*s, ay=cy+(st.a.y-me.y)*s;
-      var bx=cx+(st.b.x-me.x)*s, by=cy+(st.b.y-me.y)*s;
-      if(st.horiz){ if(ay<-20||ay>H+20) return; ax=0; bx=W; }
-      else { if(ax<-20||ax>W+20) return; ay=0; by=H; }
-      mx.strokeStyle="#111b22"; mx.lineWidth=13*dpr;
-      mx.beginPath(); mx.moveTo(ax,ay); mx.lineTo(bx,by); mx.stroke();
-      mx.strokeStyle="#1b2831"; mx.lineWidth=1*dpr;
-      mx.beginPath(); mx.moveTo(ax,ay); mx.lineTo(bx,by); mx.stroke();
-    });
+      [50,100,200].forEach(function(m){ mx.fillText(m+" m", pxP+4*dpr, pyP-m*s-4*dpr); });
+    } else {
+      /* két menet: előbb az úttest, aztán a szegély — így nem vágják egymást */
+      [0,1].forEach(function(pass){
+        streets.forEach(function(st){
+          var pts=st.pts; if(!pts||pts.length<2) return;
+          var vis=false;
+          for(var i=0;i<pts.length;i++){
+            if(Math.abs(pts[i].x-cxm)<halfW+120&&Math.abs(pts[i].y-cym)<halfH+120){ vis=true; break; }
+          }
+          if(!vis) return;
+          var wide=st.major?13:8;
+          mx.strokeStyle = pass===0 ? "#111b22" : "#1b2831";
+          mx.lineWidth = pass===0 ? wide*dpr : 1*dpr;
+          mx.lineJoin="round"; mx.lineCap="round";
+          mx.beginPath();
+          for(var j=0;j<pts.length;j++){
+            var px=cx+(pts[j].x-cxm)*s, py=cy+(pts[j].y-cym)*s;
+            if(j===0) mx.moveTo(px,py); else mx.lineTo(px,py);
+          }
+          mx.stroke();
+        });
+      });
+      /* utcanevek */
+      mx.font=(9.5*dpr)+"px IBM Plex Mono, ui-monospace, monospace";
+      mx.textAlign="center";
+      streets.forEach(function(st){
+        if(!st.name||!st.pts||st.pts.length<2) return;
+        var i=Math.floor(st.pts.length/2);
+        var p1=st.pts[i-1], p2=st.pts[i];
+        var mxp=(p1.x+p2.x)/2, myp=(p1.y+p2.y)/2;
+        if(Math.abs(mxp-cxm)>halfW||Math.abs(myp-cym)>halfH) return;
+        var ang=Math.atan2(p2.y-p1.y,p2.x-p1.x);
+        if(ang>Math.PI/2) ang-=Math.PI; if(ang<-Math.PI/2) ang+=Math.PI;
+        mx.save();
+        mx.translate(cx+(mxp-cxm)*s, cy+(myp-cym)*s);
+        mx.rotate(ang);
+        mx.fillStyle="rgba(96,115,127,.5)";
+        mx.fillText(st.name, 0, -7*dpr);
+        mx.restore();
+      });
+    }
 
     /* hatótáv-kör */
     mx.strokeStyle="rgba(63,201,189,.22)"; mx.lineWidth=1*dpr;
     mx.setLineDash([4*dpr,4*dpr]);
-    mx.beginPath(); mx.arc(cx,cy,RANGE*s,0,TAU); mx.stroke();
+    mx.beginPath(); mx.arc(pxP,pyP,RANGE*s,0,TAU); mx.stroke();
     mx.setLineDash([]);
 
     /* csomópontok */
@@ -413,8 +478,9 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
       var dist=Math.sqrt(dx*dx+dy*dy);
       var actionable = n.owner!==1 || n.ice<SIZES[n.size].maxIce || n.siege;
       if(dist<bestD && actionable){ bestD=dist; best=n; }
-      if(Math.abs(dx)>halfW||Math.abs(dy)>halfH) return;
-      var X=cx+dx*s, Y=cy+dy*s;
+      if(Math.abs(n.x-cxm)>halfW||Math.abs(n.y-cym)>halfH) return;
+      var X=cx+(n.x-cxm)*s, Y=cy+(n.y-cym)*s;
+      n._sx=X; n._sy=Y;
       var inR=dist<=RANGE;
       var col = n.owner===1 ? "#8fd36a" : (n.owner===2 ? "#e2574c" : (inR ? "#f0a338" : "#3fc9bd"));
       mx.save();
@@ -476,10 +542,10 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
     mx.save();
     var pulse=0.5+0.5*Math.sin(ts/700);
     mx.globalAlpha=0.12+0.1*pulse; mx.fillStyle="#c6d3dc";
-    mx.beginPath(); mx.arc(cx,cy,(13+5*pulse)*dpr,0,TAU); mx.fill();
+    mx.beginPath(); mx.arc(pxP,pyP,(13+5*pulse)*dpr,0,TAU); mx.fill();
     mx.globalAlpha=1;
     mx.fillStyle="#c6d3dc";
-    mx.beginPath(); mx.arc(cx,cy,5*dpr,0,TAU); mx.fill();
+    mx.beginPath(); mx.arc(pxP,pyP,5*dpr,0,TAU); mx.fill();
     mx.strokeStyle="#080c10"; mx.lineWidth=1.6*dpr; mx.stroke();
     mx.restore();
 
@@ -498,29 +564,93 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
 
   /* ---------- mozgás ---------- */
   var stick={on:false,ox:0,oy:0,cx:0,cy:0,id:null};
+  var pan={x:0,y:0};
+  var drag={on:false,id:null,sx:0,sy:0,px:0,py:0,moved:0};
   var wrap=document.getElementById("mapwrap");
-  wrap.addEventListener("pointerdown",function(e){
-    if(stick.on||GPS.on) return;
+
+  function localXY(e){
     var r=wrap.getBoundingClientRect();
+    return {x:e.clientX-r.left, y:e.clientY-r.top};
+  }
+
+  wrap.addEventListener("pointerdown",function(e){
+    var p=localXY(e);
+    if(GPS.on){
+      /* GPS-módban a húzás a térképet pásztázza, nem a játékost mozgatja */
+      drag.on=true; drag.id=e.pointerId; drag.sx=p.x; drag.sy=p.y;
+      drag.px=pan.x; drag.py=pan.y; drag.moved=0;
+      wrap.setPointerCapture(e.pointerId);
+      e.preventDefault();
+      return;
+    }
+    if(stick.on) return;
     stick.on=true; stick.id=e.pointerId;
-    stick.ox=e.clientX-r.left; stick.oy=e.clientY-r.top;
-    stick.cx=stick.ox; stick.cy=stick.oy;
+    stick.ox=p.x; stick.oy=p.y; stick.cx=p.x; stick.cy=p.y;
     wrap.setPointerCapture(e.pointerId);
     document.getElementById("walkhint").textContent="";
     e.preventDefault();
   });
   wrap.addEventListener("pointermove",function(e){
+    var p=localXY(e);
+    if(drag.on&&e.pointerId===drag.id){
+      var s=PPM;
+      pan.x=drag.px-(p.x-drag.sx)/s;
+      pan.y=drag.py-(p.y-drag.sy)/s;
+      drag.moved=Math.max(drag.moved, Math.abs(p.x-drag.sx)+Math.abs(p.y-drag.sy));
+      document.getElementById("recenter").classList.toggle("on", Math.abs(pan.x)+Math.abs(pan.y)>12);
+      return;
+    }
     if(!stick.on||e.pointerId!==stick.id) return;
-    var r=wrap.getBoundingClientRect();
-    stick.cx=e.clientX-r.left; stick.cy=e.clientY-r.top;
+    stick.cx=p.x; stick.cy=p.y;
   });
-  function endStick(e){
+  function endPointer(e){
+    if(drag.on&&e.pointerId===drag.id){
+      drag.on=false;
+      try{ wrap.releasePointerCapture(e.pointerId); }catch(x){}
+      if(drag.moved<9) tapAt(localXY(e));
+      return;
+    }
     if(!stick.on) return;
+    var moved=Math.abs(stick.cx-stick.ox)+Math.abs(stick.cy-stick.oy);
     stick.on=false; vel.x=0; vel.y=0;
     try{ wrap.releasePointerCapture(e.pointerId); }catch(x){}
+    if(moved<9) tapAt(localXY(e));
   }
-  wrap.addEventListener("pointerup",endStick);
-  wrap.addEventListener("pointercancel",endStick);
+  wrap.addEventListener("pointerup",endPointer);
+  wrap.addEventListener("pointercancel",endPointer);
+
+  /* koppintás egy csomópontra → adatlap */
+  function tapAt(p){
+    var best=null, bd=1e9;
+    var d2=Math.min(window.devicePixelRatio||1,2.5);
+    nodes.forEach(function(n){
+      if(n._sx===undefined) return;
+      var dx=n._sx/d2-p.x, dy=n._sy/d2-p.y;
+      var d=Math.sqrt(dx*dx+dy*dy);
+      if(d<26&&d<bd){ bd=d; best=n; }
+    });
+    if(best) showInfo(best); else hideInfo();
+  }
+
+  var infoNode=null;
+  function showInfo(n){
+    infoNode=n;
+    var dx=n.x-me.x, dy=n.y-me.y, dist=Math.sqrt(dx*dx+dy*dy);
+    var SZ=SIZES[n.size];
+    var own = n.owner===1 ? "a tiéd" : (n.owner===2 ? "Vektor Szindikátus" : "semleges");
+    document.getElementById("infoName").textContent=n.label;
+    document.getElementById("infoMeta").textContent=
+      (n.addr? n.addr+" · " : "")+SZ.name+" · ICE Tier "+(n.tier===3?"III":"II");
+    document.getElementById("infoState").textContent=
+      Math.round(dist)+" m · "+own+(n.ice?" · ICE "+n.ice+"/"+SZ.maxIce:"")+(n.siege?" · OSTROM ALATT":"");
+    document.getElementById("info").classList.add("on");
+  }
+  function hideInfo(){ infoNode=null; document.getElementById("info").classList.remove("on"); }
+  document.getElementById("infoClose").addEventListener("click",hideInfo);
+
+  document.getElementById("recenter").addEventListener("click",function(){
+    pan.x=0; pan.y=0; this.classList.remove("on");
+  });
 
   document.getElementById("speed").addEventListener("click",function(){
     fast=!fast; this.dataset.fast=fast?"1":"0";
@@ -551,6 +681,7 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
 
     var res=drawMap(ts);
     updateTarget(res.best,res.bestD);
+    if(infoNode) showInfo(infoNode);
 
     document.getElementById("hudWalk").textContent=Math.round(walked)+" m";
     document.getElementById("hudAcc").textContent = GPS.on ? ("GPS ±"+Math.round(GPS.acc)+" m") : "Szimulált séta";
@@ -1323,6 +1454,114 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
     return { x:(lon-GPS.lon0)*mLon, y:-(lat-GPS.lat0)*mLat };
   }
 
+  /* ---------- valódi OpenStreetMap-adat ---------- */
+  var OSM_HOSTS=["https://overpass-api.de/api/interpreter",
+                 "https://overpass.kumi.systems/api/interpreter"];
+  var HW="primary|secondary|tertiary|residential|unclassified|living_street|pedestrian|footway|path|service";
+  var AM="cafe|restaurant|fast_food|bar|pub|pharmacy|bank|post_office|library|cinema|theatre|doctors|dentist|fuel|ice_cream|bakery";
+
+  function osmQuery(lat,lon,rad){
+    return "[out:json][timeout:25];(" +
+      'way["highway"~"^('+HW+')$"](around:'+rad+','+lat+','+lon+');' +
+      'node["shop"](around:'+rad+','+lat+','+lon+');' +
+      'node["amenity"~"^('+AM+')$"](around:'+rad+','+lat+','+lon+');' +
+      'way["shop"](around:'+rad+','+lat+','+lon+');' +
+      ");out geom;";
+  }
+
+  function fetchOSM(lat,lon){
+    var rad=700, q=osmQuery(lat,lon,rad);
+    var i=0;
+    function attempt(){
+      if(i>=OSM_HOSTS.length){ osmFailed(); return; }
+      var url=OSM_HOSTS[i++];
+      fetch(url,{method:"POST",body:"data="+encodeURIComponent(q),
+                 headers:{"Content-Type":"application/x-www-form-urlencoded"}})
+        .then(function(r){ if(!r.ok) throw new Error(r.status); return r.json(); })
+        .then(function(j){ buildFromOSM(j); })
+        .catch(function(){ attempt(); });
+    }
+    attempt();
+  }
+  function osmFailed(){
+    toast("Nem jött OSM-adat — generált utcahálóval megy tovább.");
+  }
+
+  function hash32(str){
+    var h=2166136261;
+    for(var i=0;i<str.length;i++){ h^=str.charCodeAt(i); h=Math.imul(h,16777619); }
+    return (h>>>0)/4294967296;
+  }
+
+  function sizeFromTags(t){
+    var s=t.shop||"", a=t.amenity||"";
+    if(/supermarket|mall|department_store|furniture|car|doityourself|electronics/.test(s)) return 3;
+    if(/bank|cinema|theatre|library|post_office/.test(a)) return 3;
+    if(/clothes|shoes|optician|bakery|butcher|hairdresser|chemist|books|sports|jewelry/.test(s)) return 2;
+    if(/restaurant|pharmacy|doctors|dentist|fuel|pub/.test(a)) return 2;
+    return 1;
+  }
+  function kindFromTags(t){
+    var map={supermarket:"Élelmiszer",bakery:"Pékség",optician:"Optika",clothes:"Ruházat",
+      shoes:"Cipőbolt",hairdresser:"Fodrászat",chemist:"Drogéria",books:"Könyvesbolt",
+      florist:"Virágbolt",butcher:"Hentes",greengrocer:"Zöldséges",jewelry:"Ékszer",
+      sports:"Sportbolt",mobile_phone:"Telefon",furniture:"Bútor",car:"Autó",
+      cafe:"Kávézó",restaurant:"Étterem",fast_food:"Gyorsétterem",bar:"Bár",pub:"Kocsma",
+      pharmacy:"Gyógyszertár",bank:"Bank",post_office:"Posta",library:"Könyvtár",
+      cinema:"Mozi",theatre:"Színház",doctors:"Orvos",dentist:"Fogorvos",fuel:"Benzinkút",
+      ice_cream:"Fagyizó"};
+    return map[t.shop]||map[t.amenity]||(t.shop?"Üzlet":"Hely");
+  }
+
+  function buildFromOSM(j){
+    var els=j.elements||[];
+    var ns=[], sts=[], id=0;
+    els.forEach(function(el){
+      if(el.type==="way"&&el.tags&&el.tags.highway&&el.geometry){
+        var pts=el.geometry.map(function(g){ return toLocal(g.lat,g.lon); });
+        sts.push({pts:pts, name:el.tags.name||"",
+                  major:/^(primary|secondary|tertiary)$/.test(el.tags.highway)});
+        return;
+      }
+      var t=el.tags||{};
+      if(!t.shop&&!t.amenity) return;
+      var lat,lon;
+      if(el.type==="node"){ lat=el.lat; lon=el.lon; }
+      else if(el.geometry&&el.geometry.length){
+        var sx=0,sy=0; el.geometry.forEach(function(g){ sx+=g.lat; sy+=g.lon; });
+        lat=sx/el.geometry.length; lon=sy/el.geometry.length;
+      } else return;
+      var p=toLocal(lat,lon);
+      var h=hash32(el.type+el.id);
+      var addr=(t["addr:street"]? t["addr:street"]+(t["addr:housenumber"]?" "+t["addr:housenumber"]:"") : "");
+      ns.push({ id:id++, x:p.x, y:p.y,
+        tier: h<0.2?3:2, size:sizeFromTags(t),
+        owner:0, ice:0, siege:null,
+        kind:kindFromTags(t),
+        label:t.name||kindFromTags(t),
+        addr:addr,
+        d:distKey(p.x,p.y) });
+    });
+
+    if(ns.length<6){ osmFailed(); return; }
+
+    nodes=ns; streets=sts;
+    districts={};
+    nodes.forEach(function(n){
+      if(!districts[n.d]) districts[n.d]={total:0,mine:0,theirs:0};
+      districts[n.d].total++;
+    });
+    /* a Vektor a legtávolabbi sarokból indul */
+    var far=nodes.slice().sort(function(a,b){
+      return (b.x*b.x+b.y*b.y)-(a.x*a.x+a.y*a.y);
+    });
+    var take=Math.max(2,Math.round(nodes.length*0.22));
+    far.slice(0,take).forEach(function(n){ n.owner=2; n.ice=Math.random()<0.5?1:0; });
+    recountDistricts();
+    load(); refreshStats();
+    toast(nodes.length+" valódi csomópont betöltve a környékedről.");
+  }
+
   function startGPS(){
     if(!navigator.geolocation){ gpsFail("Ez a böngésző nem tud helymeghatározást."); return; }
     document.getElementById("gpsMsg").textContent="Műhold keresése…";
@@ -1332,12 +1571,13 @@ button,button *,canvas,.target,.hud,.toast,.walkhint,.ovstatus,.meter,.race,.sta
         GPS.lat0=p.coords.latitude; GPS.lon0=p.coords.longitude;
         /* a világ magja a helyszínhez kötött: ugyanott mindig ugyanaz a térkép */
         SEED=Math.abs(Math.round(GPS.lat0*1000)*73856093 ^ Math.round(GPS.lon0*1000)*19349663)%2147483647;
-        build(); load(); me.x=0; me.y=0; walked=0;
+        build(); load(); me.x=0; me.y=0; walked=0; pan.x=0; pan.y=0;
         GPS.on=true;
         document.getElementById("speed").style.display="none";
-        document.getElementById("walkhint").textContent="";
+        document.getElementById("walkhint").textContent="Húzd a térképet a körülnézéshez";
         document.getElementById("gate").classList.remove("on");
         refreshStats();
+        fetchOSM(GPS.lat0,GPS.lon0);
       } else {
         var l=toLocal(p.coords.latitude,p.coords.longitude);
         var dx=l.x-me.x, dy=l.y-me.y, d=Math.sqrt(dx*dx+dy*dy);
